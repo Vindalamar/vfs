@@ -1,6 +1,6 @@
 # Virtual File System
 
-Simple vfs, required C++17
+Simple vfs, C++17 required
 
 ## Usage
 

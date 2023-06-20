@@ -4,10 +4,15 @@
 #include <iostream>
 #include <mutex>
 #include <fstream>
-#include <thread>
-#include<vector> 
+#include <vector> 
 #include <algorithm>
 #include <unordered_map>
+#include <cassert>
+
+
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 namespace fs = std::filesystem;
 
@@ -132,20 +137,19 @@ namespace TestTask
 					return openedFiles[name];
 				}
 					
-
 			auto it = std::ranges::find(nameList, name, &std::pair<std::string, size_t>::first);
 			
 			if(it != nameList.end()) {
-				std::ifstream oldF("mainFile.data");
-				std::ofstream newF("mainFileTemp.data");
+				std::ifstream oldF("mainFile.data", std::ios::binary);
+				std::ofstream newF("mainFileTemp.data", std::ios::binary);
 				
 				size_t before = (*it).second;
+				char c;
 
-				char* buff = new char[before];
-
-				oldF.read(buff, before);
-				
-				newF.write(buff, before);
+				for (size_t i = 0; i < before; i++) {
+					oldF.get(c);
+					newF << c;
+				}
 
 				oldF.seekg(0, std::ios::end);
 				size_t length = oldF.tellg(); 
@@ -153,13 +157,13 @@ namespace TestTask
 				it = nameList.erase(it);
 
 				if (it != nameList.end()) {
-					
 					size_t after = (*it).second;
-					char* buff1 = new char[length - after];
+
 					oldF.seekg(after);
-					oldF.read(buff1, length - after);
-					newF.write(buff1, length - after);
-					delete[] buff1;
+					
+					while(oldF.get(c))
+						newF << c;
+					
 
 					while (it != nameList.end()) {
 						(*it).second = (*it).second - after + before;
@@ -171,8 +175,6 @@ namespace TestTask
 				newF.close();
 				fs::remove("mainFile.data");
 				fs::rename("mainFileTemp.data", "mainFile.data");
-
-				delete[] buff;
 			}
 
 			File* f = new File(name , fileState::Write);
@@ -188,7 +190,7 @@ namespace TestTask
 			if (f->fState != fileState::Read)
 				return 0;
 
-			f->fileStream.open("mainFile.data", std::fstream::in);
+			f->fileStream.open("mainFile.data", std::fstream::in | std::fstream::binary);
 
 			f->fileStream.seekg(nameList[f->index].second);
 
@@ -219,8 +221,8 @@ namespace TestTask
 			std::lock_guard<std::mutex > lk(m2);
 
 			if (f->fState == fileState::Write) {
-				nameList.push_back(std::pair(f->filename, std::fstream("mainFile.data", std::fstream::in | std::fstream::ate).tellg()));
-				f->fileStream.open("mainFile.data", std::fstream::app);
+				nameList.push_back(std::pair(f->filename, std::fstream("mainFile.data", std::fstream::in | std::fstream::ate | std::fstream::binary).tellg()));
+				f->fileStream.open("mainFile.data", std::fstream::app | std::fstream::binary);
 				if (!f->fileStream.is_open())
 					return;
 				f->fileStream.write(f->writeBuff.c_str(), f->writeBuff.size());
@@ -240,38 +242,32 @@ namespace TestTask
 		TestTask::File* f1 = vfs.Create("new1.txt");
 		TestTask::File* f2 = vfs.Create("new2.txt");
 		
-		std::string s1 = "Давно выяснено, что при оценке дизайна и композиции читаемый текст мешает сосредоточиться. Lorem Ipsum";
-		std::string s2 = "Жил был хатабыч";
+		std::string s1 = "SENTENCE1";
+		std::string s2 = "SENTENCE2";
+		size_t i;
 
 
-		size_t i1 = vfs.Write(f1, s1.data(), s1.size());
-		size_t i2 = vfs.Write(f2, s2.data(), s2.size());
+		std::string s4;
+		std::string s3;
 
-
-		vfs.Close(f1);
-		vfs.Close(f2);
-
-		// char buff1[100];
-
-		// char buff2[100];
-
-		char* buff = new char[i1];
-		char* buff2 = new char[i2];
-
-		f1 = vfs.Open("new1.txt");
-		f2 = vfs.Open("new2.txt");
-
-		size_t r1 = vfs.Read(f1, buff, i1 + 1);
-		size_t r2 = vfs.Read(f2, buff2, i2);
-
-
-		std::cout << buff;
-		std::cout << buff2;
-
-		vfs.Close(f1);
-		vfs.Close(f2);
-	
-		delete[] buff;
-		delete[] buff2;
+		for (size_t i = 0; i < 500; i++)
+		{
+			f1 = vfs.Open(("new1.txt" + std::to_string(i)).data());
+			f2 = vfs.Open(("new2.txt" + std::to_string(i)).data());
+			s3 = (s1 + std::to_string(i) + "\n");
+			s4 = (s2 + std::to_string(i) + "\n");
+			
+			char* buff = new char[s3.size() + 1] {};
+			char* buff2 = new char[s4.size() + 1] {};
+			vfs.Read(f1, buff, s3.size());
+			vfs.Read(f2, buff2, s4.size());
+			vfs.Close(f1);
+			vfs.Close(f2);
+			assert(strcmp(buff, s3.data()) == 0);
+			assert(strcmp(buff2, s4.data()) == 0);
+			delete[] buff;
+			delete[] buff2;
+		}
+		
 
 	}

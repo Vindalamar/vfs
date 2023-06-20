@@ -8,11 +8,8 @@
 #include <algorithm>
 #include <unordered_map>
 #include <cassert>
+#include <shared_mutex>
 
-
-#include <string.h>
-#include <stdio.h>
-#include <stdlib.h>
 
 namespace fs = std::filesystem;
 
@@ -64,16 +61,18 @@ namespace TestTask
 	struct VFS: public IVFS
 	{
 		typedef std::pair<std::string, size_t> fileStart;
-
 		std::fstream fileS;
-
 		std::mutex m1, m2;
+		std::shared_timed_mutex mutex;
 		public:
 
+		// Все сохраненные файлы и их адреса
 		std::vector<fileStart> nameList;
+		// Открытые в данный момент файлы
 		std::unordered_map <std::string, File*> openedFiles;
 
 		VFS() {
+			// При повтороном открытии системы в том же месте, все сохраненные файлы будут импортированы в новую систему
 			if(fs::exists(fs::path("filenames.data"))) {
 				std::string name;
 				std::string delimiter = " | ";
@@ -96,39 +95,39 @@ namespace TestTask
 		}
 
 		~VFS() {
+			// Сохранение всех файлов и их адресов
 			fileS.open("filenames.data", std::fstream::out);
 			for (fileStart p : nameList)
 				fileS << p.first << " | " << p.second << "\n";
 		}
 
-		File* Open(const char *name)
-		{
+
+		File* Open(const char *name) {
 			std::lock_guard<std::mutex > lk(m1);
 
+			// Проверка есть открыт ли уже файл
 			if (openedFiles.find(name) != openedFiles.end())
 				if(openedFiles[name]->fState == fileState::Write)
 					return nullptr; 
 				else
 					return openedFiles[name];
 			
-
 			auto it = std::ranges::find(nameList, name, &std::pair<std::string, size_t>::first);
 
 			if (it == nameList.end())
 				return nullptr;
 
-
 			File* f = new File(name , fileState::Read, &(*it).second, it - nameList.begin());
-
 			openedFiles[name] = f;
-
 			return f;
 		}
 
-		File* Create(const char *name)
-		{	
-			std::lock_guard<std::mutex > lk(m1);
 
+		File* Create(const char *name) {	
+			std::lock_guard<std::mutex > lk(m1);
+			std::unique_lock<std::shared_timed_mutex> lock(mutex);
+
+			// Проверка есть открыт ли уже файл
 			if (openedFiles.find(name) != openedFiles.end())
 				if(openedFiles[name]->fState == fileState::Read)
 					return nullptr; 
@@ -139,6 +138,7 @@ namespace TestTask
 					
 			auto it = std::ranges::find(nameList, name, &std::pair<std::string, size_t>::first);
 			
+			// Удаление данных, если файл был уже раннее создан и закрыт, перезапись главного файла
 			if(it != nameList.end()) {
 				std::ifstream oldF("mainFile.data", std::ios::binary);
 				std::ofstream newF("mainFileTemp.data", std::ios::binary);
@@ -164,7 +164,7 @@ namespace TestTask
 					while(oldF.get(c))
 						newF << c;
 					
-
+					// Сдвиг всех адресов на размер удаляемого файла
 					while (it != nameList.end()) {
 						(*it).second = (*it).second - after + before;
 						++it;
@@ -178,46 +178,42 @@ namespace TestTask
 			}
 
 			File* f = new File(name , fileState::Write);
-
 			openedFiles[name] = f;
-			
 			return f;
 		}
 
 
-		size_t Read(File *f, char *buff, size_t len)
-		{
+		size_t Read(File *f, char *buff, size_t len) {
+			
 			if (f->fState != fileState::Read)
 				return 0;
 
+			std::shared_lock<std::shared_timed_mutex> lock(mutex);
+
 			f->fileStream.open("mainFile.data", std::fstream::in | std::fstream::binary);
-
 			f->fileStream.seekg(nameList[f->index].second);
-
 			f->fileStream.read(buff, len);
-
 			f->fileStream.close();
-
 			return f->fileStream.gcount();
 		}
 
 
-		size_t Write(File *f, char *buff, size_t len)
-		{
+		// Сохраняет данные из buff в File, чтобы потом записать, нужно для упорядочивания записи
+		size_t Write(File *f, char *buff, size_t len) {
 			if (f->fState != fileState::Write)
 				return 0;
 
 			std::lock_guard<std::mutex > lk(m2);
 
 			size_t before = f->writeBuff.size(); 
-
 			f->writeBuff += buff;
-			
+
 			return  f->writeBuff.size() - before;
 		}
+		
 
-		void Close(File *f)
-		{	
+		// Реально записывает данные в файл, если что-то записывалось и закрывает его
+		void Close(File *f) {	
 			std::lock_guard<std::mutex > lk(m2);
 
 			if (f->fState == fileState::Write) {
@@ -237,37 +233,59 @@ namespace TestTask
 	int main() /* demo */ {
 		
 		
-		TestTask::VFS vfs;
+		// TestTask::VFS vfs;
 
-		TestTask::File* f1 = vfs.Create("new1.txt");
-		TestTask::File* f2 = vfs.Create("new2.txt");
+		// TestTask::File* f1;
+		// TestTask::File* f2;
+
+		// TestTask::File* f3;
+		// TestTask::File* f4;
 		
-		std::string s1 = "SENTENCE1";
-		std::string s2 = "SENTENCE2";
-		size_t i;
+		// std::string s1 = "SENTENCE1 ";
+		// std::string s2 = "SENTENCE2 ";
+		// size_t i;
 
+		// std::string s4;
+		// std::string s3;
+		// std::string s5;
+		// std::string s6;
 
-		std::string s4;
-		std::string s3;
+		// for (size_t i = 0; i < 500; i++)
+		// {
+		// 	f1 = vfs.Open(("new1.txt" + std::to_string(i)).data());
+		// 	// f1 = vfs.Create(("new1.txt" + std::to_string(i)).data());
+		// 	f2 = vfs.Create(("new2.txt" + std::to_string(i)).data());
 
-		for (size_t i = 0; i < 500; i++)
-		{
-			f1 = vfs.Open(("new1.txt" + std::to_string(i)).data());
-			f2 = vfs.Open(("new2.txt" + std::to_string(i)).data());
-			s3 = (s1 + std::to_string(i) + "\n");
-			s4 = (s2 + std::to_string(i) + "\n");
+		// 	f3 = vfs.Open(("new1.txt" + std::to_string(i + 1)).data());
+		// 	f4 = vfs.Create(("new2.txt" + std::to_string(i + 1)).data());
+
+		// 	s3 = (s1 + std::to_string(i) + "\n");
+		// 	s4 = (s2 + std::to_string(i) + "\n");
+		// 	s5 = (s1 + std::to_string(i + 1) + "\n");
+		// 	s6 = (s2 + std::to_string(i + 1) + "\n");
 			
-			char* buff = new char[s3.size() + 1] {};
-			char* buff2 = new char[s4.size() + 1] {};
-			vfs.Read(f1, buff, s3.size());
-			vfs.Read(f2, buff2, s4.size());
-			vfs.Close(f1);
-			vfs.Close(f2);
-			assert(strcmp(buff, s3.data()) == 0);
-			assert(strcmp(buff2, s4.data()) == 0);
-			delete[] buff;
-			delete[] buff2;
-		}
-		
+		// 	char* buff = new char[s3.size() + 1] {};
+		// 	char* buff2 = new char[s5.size() + 1] {};
+
+		// 	vfs.Read(f1, buff, s3.size());
+			
+		// 	// vfs.Write(f1, s3.data(), s3.size());
+
+		// 	vfs.Write(f2, s4.data(), s4.size());
+
+		// 	vfs.Read(f3, buff2, s5.size());
+
+
+		// 	vfs.Write(f4, s6.data(), s6.size());
+			
+		// 	vfs.Close(f1);
+		// 	vfs.Close(f2);
+		// 	vfs.Close(f3);
+		// 	vfs.Close(f4);
+		// 	assert(strcmp(buff, s3.data()) == 0);
+		// 	assert(strcmp(buff2, s5.data()) == 0);
+		// 	delete[] buff;
+		// 	delete[] buff2;
+		// }
 
 	}

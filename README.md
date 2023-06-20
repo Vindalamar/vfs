@@ -1,6 +1,6 @@
 # Virtual File System
 
-Simple vfs, C++20 required
+Simple vfs, Tested on Windows (but shoud be POSIX compatible), C++20 required
 
 ## Usage
 

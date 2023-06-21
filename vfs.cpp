@@ -215,6 +215,7 @@ namespace TestTask
 		// Реально записывает данные в файл, если что-то записывалось и закрывает его
 		void Close(File *f) {	
 			std::lock_guard<std::mutex > lk(m2);
+			std::shared_lock<std::shared_timed_mutex> lock(mutex);
 
 			if (f->fState == fileState::Write) {
 				nameList.push_back(std::pair(f->filename, std::fstream("mainFile.data", std::fstream::in | std::fstream::ate | std::fstream::binary).tellg()));
